@@ -9,7 +9,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { exec, run, theme, layout, notify, shared, setShared, knownAgents, props, openOverlay, closeOverlay } from "herdr";
+import { exec, run, theme, layout, notify, shared, setShared, knownAgents, props, openOverlay, closeOverlay, nextCommand } from "herdr";
 
 const EVERY = 60000;
 const PAGE = 250;
@@ -238,6 +238,16 @@ export default class Linear extends View {
     this.refresh(cx); this.loadProjects(cx); this.checkSetup(cx);
     // Timers run while the panel is hidden too; only fetch while it shows.
     cx.timer.every(EVERY, (cx) => { if (this.shown()) this.refresh(cx); });
+    // Commands from keys.json or `herdr-app do`: `linear.open:ENG-142` shows that issue,
+    // `linear.back` goes back to the list. Lets an agent (or a key) drive the panel.
+    cx.spawn(async (cx) => {
+      for (;;) {
+        const c = String(await nextCommand());
+        const m = c.match(/^open[: ]\s*(\S+)$/);
+        if (m) { this.welcome = false; this.settingsOpen = false; this.stack = []; this.open(m[1].toUpperCase(), cx); }
+        else if (c === "back") { this.stack = []; this.picking = null; this.menu = null; cx.notify(); }
+      }
+    });
     // While the welcome waits on a step (say, a login in a terminal), it ticks by itself.
     cx.timer.every(5000, (cx) => { if (this.welcome && !this.setupDone() && this.shown()) this.checkSetup(cx); });
   }
