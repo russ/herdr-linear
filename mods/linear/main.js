@@ -177,7 +177,8 @@ const nobody = (t) => div().size(18).flex_none().rounded(9).border_1().border_co
 const prefs = () => shared(PREFS) ?? {};
 const savePrefs = (change) => setShared(PREFS, { ...prefs(), ...change });
 
-// Play actions: { id, name, agent (a knownAgents key; null: the first installed), prompt }.
+// Play actions: { id, name, agent (a knownAgents key; null: the first installed), prompt,
+// where ("tab", the default: a new tab in this space; "space": a new space showing the issue) }.
 // Before there were several, the one agent and prompt sat at the top of the prefs.
 function actions() {
   const p = prefs();
@@ -416,7 +417,8 @@ export default class Linear extends View {
     cx.notify();
   }
 
-  // A play action: a new tab in this space running its agent, with the prompt as the first message.
+  // A play action: a new tab in this space (or a new space) running its agent, with the prompt
+  // as the first message. A new space opens on the issue, with this panel showing it.
   startAgent(issue, action, cx) {
     cx.spawn(async (cx) => {
       const agents = (await knownAgents().catch(() => [])).filter((a) => a.installed);
@@ -425,7 +427,12 @@ export default class Linear extends View {
         notify({ title: "No agent to start", body: "Install an agent such as Claude Code or Codex, then pick it in Linear settings.", level: "error" });
         return;
       }
-      run("tab.new", { name: issue.identifier, argv: agent.run, task: fillPrompt(action.prompt, issue) });
+      const task = fillPrompt(action.prompt, issue);
+      if (action.where === "space") {
+        const here = spaces().find((s) => s.active);
+        this.handoff = { issue: issue.identifier, from: this.spaceId(), until: Date.now() + 5000 };
+        run("space.new", { name: issue.identifier, folder: here?.folder || undefined, machine: here?.machine ?? "", argv: agent.run, task });
+      } else run("tab.new", { name: issue.identifier, argv: agent.run, task });
       notify({ title: `${action.name || "Action"}: started ${agent.name} on ${issue.identifier}`, level: "success", timeout: 2000 });
     });
   }
@@ -459,6 +466,21 @@ export default class Linear extends View {
   saveStacks() {
     const live = new Set(spaces().map((s) => s.id));
     setShared(SPACES, Object.fromEntries(Object.entries(this.stacks).filter(([id, list]) => live.has(id) && list.length)));
+  }
+
+  // A play that opened a new space hands it its issue, and shows this panel there. The delay lets
+  // the tab bar restore the new space's panel (none) first, so showing it wins.
+  adopt(space, cx) {
+    const h = this.handoff;
+    if (!h || space === h.from || Date.now() > h.until) return;
+    this.handoff = null;
+    this.stacks[space] = [h.issue];
+    cx.timer.after(250, (cx) => {
+      this.saveStacks();
+      const own = find(layout(), "panel-body")?.children?.find((c) => c.content?.mod === "linear");
+      if (own) { run("layout.select", { stack: "panel-body", child: own.id }); run("layout.show", { id: "panel" }); }
+      cx.notify();
+    });
   }
 
   load(id, cx) {
@@ -828,6 +850,10 @@ export default class Linear extends View {
           .child(agentIcon(agent, t, 16))
           .child(div().child(agent?.name ?? (this.agents === null ? "…" : "Pick an agent")))
           .child(svg(`${ICON}/chevron-down.svg`).size(10).text_color(t.dim)))
+        .child(h_flex().id(`where-of-${action.id}`).h(30).flex_none().px(8).items_center().rounded(8).cursor_pointer()
+          .bg(t.background).border_1().border_color(t.border).text_size(12.5).hover((s) => s.bg(t.hover))
+          .on_click((_e, cx) => { this.updateAction(action.id, { where: action.where === "space" ? "tab" : "space" }); cx.notify(); })
+          .child(action.where === "space" ? "New space" : "New tab"))
         .child(this.iconButton(`remove-${action.id}`, svg(`${ICON}/x.svg`).size(11), t, (_e, cx) => this.removeAction(action.id, cx))))
       .child(v_flex().px(12).pb(12).gap(10)
         .child(v_flex().gap(6)
@@ -855,7 +881,7 @@ export default class Linear extends View {
     return [
       this.header(t, div().font_semibold().child("Settings"), [], (_e, cx) => { this.settingsOpen = false; cx.notify(); }),
       v_flex().id("linear-settings").flex_1().min_h(0).overflow_y_scrollbar().px(14).pt(16).pb(20)
-        .child(this.section("Play actions", "Each one opens a new tab, starts its agent and sends its prompt. Pick one from ▶ on an issue.", t))
+        .child(this.section("Play actions", "Each one opens a new tab (or a new space showing the issue), starts its agent and sends its prompt. Pick one from ▶ on an issue.", t))
         .children(list.map((a) => this.actionCard(a, sample, t)))
         .child(h_flex().id("add-action").h(36).flex_none().gap(6).items_center().justify_center().rounded(10).cursor_pointer()
           .border_1().border_color(t.border).text_size(12.5).text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground))
@@ -955,7 +981,7 @@ export default class Linear extends View {
     if (Date.now() - this.loadedAt > EVERY && !this.loading && this.shown()) this.refresh(cx);
     // Switching spaces shows that space's issue; menus and pickers belong to the old one.
     const space = this.spaceId();
-    if (space !== this.space) { this.space = space; this.picking = null; this.menu = null; }
+    if (space !== this.space) { this.space = space; this.picking = null; this.menu = null; this.adopt(space, cx); }
     const open = this.stack.at(-1);
     if (open && !this.details[open] && !this.detailErrors[open] && !this.fetching.has(open)) this.load(open, cx);
     return v_flex().id("linear").relative().size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border)
