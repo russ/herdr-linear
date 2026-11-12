@@ -9,7 +9,7 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, InputState, Input, TextareaState, Textarea } from "gpui-base";
-import { exec, run, theme, layout, notify, shared, setShared, knownAgents, props, openOverlay, closeOverlay, nextCommand } from "herdr";
+import { exec, run, theme, layout, spaces, notify, shared, setShared, knownAgents, props, openOverlay, closeOverlay, nextCommand } from "herdr";
 
 const EVERY = 60000;
 const PAGE = 250;
@@ -22,6 +22,8 @@ const PRIORITIES = [[1, "Urgent"], [2, "High"], [3, "Medium"], [4, "Low"], [0, "
 const DEFAULT_FILTER = { scope: "anyone", types: ["backlog", "unstarted", "started"], projects: [] };
 const NO_PROJECT = "No project";
 const PREFS = "linear.prefs";
+// The open issue and the trail back to the list, per space: { [spaceId]: ["ENG-1", "ENG-7"] }.
+const SPACES = "linear.spaces";
 const DEFAULT_PROMPT = "Start working on Linear issue $issueId: $title\n$url\n\nRead it first with `linear issue view $issueId`.";
 const VARIABLES = ["$issueId", "$title", "$url", "$branch", "$description"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -216,7 +218,8 @@ export default class Linear extends View {
   init(_props, cx) {
     if (props()?.pickAgent) return this.initAgentPicker(cx);
     this.issues = null; this.more = false; this.error = null; this.loadedAt = 0; this.token = 0;
-    this.stack = []; this.details = {}; this.detailErrors = {}; this.updateErrors = {};
+    this.stacks = { ...(shared(SPACES) ?? {}) }; this.space = null; this.fetching = new Set();
+    this.details = {}; this.detailErrors = {}; this.updateErrors = {};
     this.expanded = new Set(); this.picking = null; this.saving = null; this.hover = null;
     this.search = ""; this.menu = null; this.projects = []; this.canWrite = null;
     this.selectable = true;
@@ -245,7 +248,7 @@ export default class Linear extends View {
         const c = String(await nextCommand());
         const m = c.match(/^open[: ]\s*(\S+)$/);
         if (m) { this.welcome = false; this.settingsOpen = false; this.stack = []; this.open(m[1].toUpperCase(), cx); }
-        else if (c === "back") { this.stack = []; this.picking = null; this.menu = null; cx.notify(); }
+        else if (c === "back") { this.stack = []; this.saveStacks(); this.picking = null; this.menu = null; cx.notify(); }
       }
     });
     // While the welcome waits on a step (say, a login in a terminal), it ticks by itself.
@@ -449,16 +452,28 @@ export default class Linear extends View {
     cx.notify();
   }
 
+  // Each space shows its own issue: the stack read and written here is the shown space's.
+  spaceId() { return spaces().find((s) => s.active)?.id ?? "-"; }
+  get stack() { const id = this.spaceId(); return (this.stacks[id] ??= []); }
+  set stack(list) { this.stacks[this.spaceId()] = list; }
+  saveStacks() {
+    const live = new Set(spaces().map((s) => s.id));
+    setShared(SPACES, Object.fromEntries(Object.entries(this.stacks).filter(([id, list]) => live.has(id) && list.length)));
+  }
+
   load(id, cx) {
+    this.fetching.add(id);
     cx.spawn(async (cx) => {
       try { this.details[id] = await api(DETAIL, { id }); delete this.detailErrors[id]; }
       catch (e) { this.detailErrors[id] = errorText(e); }
+      this.fetching.delete(id);
       cx.notify();
     });
   }
 
   open(id, cx) {
     this.stack.push(id); this.picking = null; this.menu = null;
+    this.saveStacks();
     this.load(id, cx);
     cx.notify();
   }
@@ -483,7 +498,7 @@ export default class Linear extends View {
       .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(onClick).child(content);
   }
 
-  header(t, title, extra = [], back = this.stack.length ? (_e, cx) => { this.stack.pop(); this.picking = null; this.menu = null; cx.notify(); } : null) {
+  header(t, title, extra = [], back = this.stack.length ? (_e, cx) => { this.stack.pop(); this.saveStacks(); this.picking = null; this.menu = null; cx.notify(); } : null) {
     return h_flex().h(42).flex_none().px(back ? 8 : 14).gap(4).items_center().border_b(1).border_color(t.border)
       .when(Boolean(back), (el) => el.child(this.iconButton("linear-back", svg(`${ICON}/chevron-left.svg`).size(15), t, back)))
       .child(title)
@@ -938,7 +953,11 @@ export default class Linear extends View {
     const t = theme();
     if (props()?.pickAgent) return this.renderAgentPicker(t);
     if (Date.now() - this.loadedAt > EVERY && !this.loading && this.shown()) this.refresh(cx);
+    // Switching spaces shows that space's issue; menus and pickers belong to the old one.
+    const space = this.spaceId();
+    if (space !== this.space) { this.space = space; this.picking = null; this.menu = null; }
     const open = this.stack.at(-1);
+    if (open && !this.details[open] && !this.detailErrors[open] && !this.fetching.has(open)) this.load(open, cx);
     return v_flex().id("linear").relative().size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border)
       .text_color(t.foreground).text_size(13)
       // A drag started in the terminal keeps selecting once the pointer crosses into the
