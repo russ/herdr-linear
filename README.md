@@ -29,6 +29,14 @@ one without leaving the window where the work happens.
   `$description` fill in from the issue. Press ▶, pick a play, and a new tab opens
   with that agent already working on it.
 - **Copy an issue ID** like `ENG-142` in one click.
+- **One issue per space.** Each space remembers the issue it had open, so switching
+  spaces switches the panel too.
+- **Plays can open a new space.** Set a play to *New space* and it starts the agent in
+  a fresh space with this panel already showing the issue: chat in the middle, issue on
+  the right.
+- **Drive it from keys or an agent.** `herdr-app do linear.open:ENG-142` shows an issue
+  and `linear.back` returns to the list (the panel has to be showing for the command to
+  reach it). In `keys.json` they're `"linear.open:ENG-142"` and `"linear.back"`.
 
 <p align="center">
   <img src="docs/plays.png" alt="Play actions in the Linear panel's settings" width="49%">
