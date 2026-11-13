@@ -243,13 +243,16 @@ export default class Linear extends View {
     // Timers run while the panel is hidden too; only fetch while it shows.
     cx.timer.every(EVERY, (cx) => { if (this.shown()) this.refresh(cx); });
     // Commands from keys.json or `herdr-app do`: `linear.open:ENG-142` shows that issue,
-    // `linear.back` goes back to the list. Lets an agent (or a key) drive the panel.
+    // `linear.back` goes back to the list,
+    // `linear.search` focuses the search box. Lets an agent (or a key) drive the panel.
     cx.spawn(async (cx) => {
       for (;;) {
         const c = String(await nextCommand());
         const m = c.match(/^open[: ]\s*(\S+)$/);
         if (m) { this.welcome = false; this.settingsOpen = false; this.stack = []; this.open(m[1].toUpperCase(), cx); }
         else if (c === "back") { this.stack = []; this.saveStacks(); this.picking = null; this.menu = null; cx.notify(); }
+        // `linear.search`: the keyboard to the search box, while the list (not an issue) shows.
+        else if (c === "search") { if (!this.welcome && !this.settingsOpen && !this.stack.length) { this.input.focus(); cx.notify(); } }
       }
     });
     // While the welcome waits on a step (say, a login in a terminal), it ticks by itself.
